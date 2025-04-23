@@ -55,6 +55,16 @@ func main() {
 			return err
 		}
 
+		for _, nodeID := range n.NodeIDs() {
+			if nodeID == n.ID() {
+				continue
+			}
+
+			if err := n.Send(nodeID, body); err != nil {
+				return err
+			}
+		}
+
 		body["type"] = "broadcast_ok"
 		messages = append(messages, body["message"].(float64))
 		delete(body, "message")
