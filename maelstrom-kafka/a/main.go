@@ -206,10 +206,13 @@ func main() {
 			return fmt.Errorf("invalid or missing 'keys' field")
 		}
 
+		// turns out go maps aren't thread safe for concurrent reads
+		mu.Lock()
 		for _, k := range(keys) {
 			key := k.(string)
 			offsets[key] = committedLogOffset[key]
 		}
+		mu.Unlock()
 
 		delete(body, "keys")
 		body["type"] = "list_committed_offsets_ok"
