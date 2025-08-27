@@ -5,16 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"sync"
 
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
 
 func main() {
-	var mu sync.Mutex
 	node := maelstrom.NewNode()
 	linKV := maelstrom.NewLinKV(node)
-	committedLogOffset := make(map[string]int)
+	seqKv := maelstrom.NewSeqKV(node)
 
 	node.Handle("send", func(msg maelstrom.Message) error {
 		var body map[string]any
@@ -39,11 +37,12 @@ func main() {
 			casErr := linKV.CompareAndSwap(context.Background(), "offset:"+key, last, next, true)
 
 			if casErr == nil {
-				// this means that it successfully replaced the offset entry there
 				offset = next
 				break
 			} else {
-				return casErr
+				if maelstrom.ErrorCode(casErr) != maelstrom.PreconditionFailed {
+					return casErr
+				}
 			}
 		}
 
@@ -67,14 +66,6 @@ func main() {
 			return err
 		}
 
-		// given a starting offset
-		// need to return messages starting from that offset. no limit on count
-		// look through kv
-
-		// fetch the record at that index. return it since we can return any count
-		// for each one of the keys
-
-		// to return messages from the offset in the log
 		messages := make(map[string][][2]int)
 		offsets, ok := body["offsets"].(map[string]any)
 		if !ok {
@@ -118,12 +109,13 @@ func main() {
 			return fmt.Errorf("invalid or missing 'offsets' field")
 		}
 
-		mu.Lock()
 		for key, value := range offsets {
 			val := int(value.(float64))
-			committedLogOffset[key] = val
+			writeErr := seqKv.Write(context.Background(), key, val)
+			if writeErr != nil {
+				return writeErr
+			}
 		}
-		mu.Unlock()
 
 		delete(body, "offsets")
 		body["type"] = "commit_offsets_ok"
@@ -142,12 +134,15 @@ func main() {
 			return fmt.Errorf("invalid or missing 'keys' field")
 		}
 
-		mu.Lock()
 		for _, k := range keys {
 			key := k.(string)
-			offsets[key] = committedLogOffset[key]
+			offset, err := seqKv.ReadInt(context.Background(), key)
+			if err != nil {
+				continue
+			}
+
+			offsets[key] = offset
 		}
-		mu.Unlock()
 
 		delete(body, "keys")
 		body["type"] = "list_committed_offsets_ok"
